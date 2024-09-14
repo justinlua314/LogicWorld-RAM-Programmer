@@ -1,5 +1,5 @@
 class Keyboard:
-    def __init__(self, address_size:int=4, data_size:int=8):
+    def __init__(self, address_size:int=4, data_size:int=8, input_delay:int=25):
         self.address_size = address_size
         self.address = [0] * address_size
         self.last_address = [0] * address_size
@@ -7,6 +7,8 @@ class Keyboard:
         self.data_size = data_size
         self.data = [0] * data_size
         self.last_data = [0] * data_size
+        
+        self.input_delay = input_delay
 
 
     def reset(self):
@@ -16,13 +18,19 @@ class Keyboard:
         self.last_data = [0] * self.data_size
 
 
-    def increment_address(self):
-        for index in range(3, -1, -1):
-            if self.address[index] == 1:
-                self.address[index] = 0
+    def increment_binary(self, binary:list[int]) -> list[int]:
+        for index in range(len(binary) -1, -1, -1):
+            if binary[index] == 1:
+                binary[index] = 0
             else:
-                self.address[index] = 1
+                binary[index] = 1
                 break
+        
+        return binary
+
+
+    def increment_address(self):
+        self.address = self.increment_binary(self.address)
     
 
     def send_address(self) -> str:
@@ -53,7 +61,7 @@ class Keyboard:
             factor //= 2
         
         return bits
-    
+
 
     def send_data(self, number:int) -> str:
         self.data = self.dec_to_binary(number, self.data_size)
@@ -71,14 +79,19 @@ class Keyboard:
     
     
     def submit_data(self) -> str:
-        chunk = "\tSleep, 25\n\tSend, {NumpadEnter Down}\n"
-        chunk += "\tSleep, 25\n\tSend, {NumpadEnter Up}\n"
+        dn = "{NumpadEnter Down}"
+        up = "{NumpadEnter Up}"
+        chunk = f"\tSleep, {self.input_delay}\n\tSend, {dn}\n"
+        chunk += f"\tSleep, {self.input_delay + 5}\n\tSend, {up}\n"
         return chunk
 
 
-    def encode_data(self, data:list[int]):
-        script = "dn(k)\n{\n\tSend, {%k% Down}\n}\nup(k)\n{\n\tSend, {%k% Up}\n}"
-        script += "\n\nF8::\n"
+    def encode_data(self, data:list[int], header=True, reset=True):
+        script = ""
+        
+        if header:
+            script += "dn(k)\n{\n\tSend, {%k% Down}\n}\nup(k)\n{\n\tSend, {%k% Up}\n}"
+            script += "\n\nF8::\n"
 
         for byte in data:
             script += self.send_address()
@@ -89,8 +102,56 @@ class Keyboard:
         self.address = [0] * self.address_size
         script += self.send_address()
         script += self.send_data(0)
+        
+        if reset: self.reset()
+        
+        return script
+            
+            
+    def encode_page_data(self, data:list[list[int]]) -> str:
+        script = "dn(k)\n{\n\tSend, {%k% Down}\n}\nup(k)\n{\n\tSend, {%k% Up}\n}"
+        script += "\n\nF8::\n"
+        page_keys = ['i', 'o', 'p']
+        page = [0, 0, 0]
+        last_page = [0, 0, 0]
+        
+        for pg_index, pg in enumerate(data):
+            for p_index, bit in enumerate(page):
+                if bit != last_page[p_index]:
+                    key = page_keys[p_index]
+                    func = "dn" if bit == 1 else "up"
+
+                    script += f"\t{func}(\"{key}\")\n"
+                    last_page[p_index] = bit
+                
+            script += self.encode_data(pg, header=False, reset=False)
+            if pg_index != len(data) - 1: page = self.increment_binary(page)
+        
+        for p_index, bit in enumerate(page):
+            if bit == 1:
+                key = page_keys[p_index]
+                script += f"\tup(\"{key}\")\n"
+        
+        return script
+    
+    
+    def encode_memory_scan(self, input_delay:int=40) -> str:
+        script = "dn(k)\n{\n\tSend, {%k% Down}\n}\nup(k)\n{\n\tSend, {%k% Up}\n}"
+        script += "\n\nF8::\n"
+        
+        for _ in range(2 ** self.address_size):
+            script += self.send_address()
+            script += f"\tSleep, {input_delay}\n"
+            self.increment_address()
+        
+        self.address = [0] * self.address_size
+        script += self.send_address()
+        
         self.reset()
         
+        return script
+            
+    def write_encoded_data(self, encode:str):
         with open("input.ahk", 'w') as fp:
-            fp.write(script + "Return")
+            fp.write(encode + "Return")
             fp.close()
